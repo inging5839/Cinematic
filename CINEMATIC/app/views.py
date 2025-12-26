@@ -1,11 +1,14 @@
 from django.shortcuts import render
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db.models import Q
 import json
+import csv
+from scipy import stats
+import numpy as np
 
 from .models import Poster, Scene
 from .utils import extract_dominant_hue_palette, compute_hsv_summary, get_aggregates_by_level
@@ -47,9 +50,9 @@ def upload_poster(request):
         poster.image.save(file.name, ContentFile(file.read()), save=False)
         poster.save()
         
-        # 색상 팔레트 추출
+        # 색상 팔레트 추출 (상위 10개)
         try:
-            palette = extract_dominant_hue_palette(poster.image.path)
+            palette = extract_dominant_hue_palette(poster.image.path, k=10)
             poster.palette = palette
             poster.save()
         except Exception as e:
@@ -369,3 +372,231 @@ def export_data(request):
     
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_correlation_analysis(request):
+    """
+    상관관계 분석
+    
+    GET /api/statistics/correlation/
+    
+    긍부정도와 H/S/V 간의 Pearson 상관계수, p-value, 회귀 분석 결과 반환
+    
+    Returns:
+    {
+        "correlation": {
+            "hue": {"r": 0.123, "p": 0.045, "significance": "significant"},
+            "saturation": {"r": 0.456, "p": 0.001, "significance": "significant"},
+            "value": {"r": 0.789, "p": 0.000, "significance": "significant"}
+        },
+        "regression": {
+            "saturation": {"slope": 12.5, "intercept": 50.2, "r_squared": 0.208},
+            "value": {"slope": 18.3, "intercept": 45.1, "r_squared": 0.622}
+        },
+        "sample_size": 1006,
+        "interpretation": {...}
+    }
+    """
+    try:
+        scenes = Scene.objects.all()
+        
+        if scenes.count() < 3:
+            return JsonResponse({
+                "error": "At least 3 scenes are required for analysis.",
+                "sample_size": scenes.count()
+            }, status=400)
+        
+        # 데이터 수집
+        levels = []
+        hues = []
+        saturations = []
+        values = []
+        
+        for scene in scenes:
+            if scene.avg_s is not None and scene.avg_v is not None and scene.dom_h is not None:
+                levels.append(scene.positivity_level)
+                hues.append(scene.dom_h)
+                saturations.append(scene.avg_s)
+                values.append(scene.avg_v)
+        
+        if len(levels) < 3:
+            return JsonResponse({
+                "error": "Not enough scenes with valid HSV data.",
+                "sample_size": len(levels)
+            }, status=400)
+        
+        levels = np.array(levels)
+        hues = np.array(hues)
+        saturations = np.array(saturations)
+        values = np.array(values)
+        
+        # Pearson 상관계수 계산
+        def get_correlation(x, y):
+            r, p = stats.pearsonr(x, y)
+            significance = "significant" if p < 0.05 else "not significant"
+            strength = "very strong" if abs(r) >= 0.7 else \
+                      "strong" if abs(r) >= 0.5 else \
+                      "moderate" if abs(r) >= 0.3 else \
+                      "weak"
+            direction = "positive" if r > 0 else "negative"
+            return {
+                "r": round(float(r), 4),
+                "p": round(float(p), 4),
+                "significance": significance,
+                "strength": strength,
+                "direction": direction
+            }
+        
+        # 상관관계 분석
+        corr_h = get_correlation(levels, hues)
+        corr_s = get_correlation(levels, saturations)
+        corr_v = get_correlation(levels, values)
+        
+        # 선형 회귀 분석 (Saturation & Value만, Hue는 원형 변수라 제외)
+        def get_regression(x, y):
+            slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+            return {
+                "slope": round(float(slope), 4),
+                "intercept": round(float(intercept), 4),
+                "r_squared": round(float(r_value ** 2), 4),
+                "p_value": round(float(p_value), 4),
+                "std_err": round(float(std_err), 4)
+            }
+        
+        reg_s = get_regression(levels, saturations)
+        reg_v = get_regression(levels, values)
+        
+        # 레벨별 평균 계산
+        level_means = {}
+        for level in range(1, 10):
+            level_scenes = [i for i, lv in enumerate(levels) if lv == level]
+            if len(level_scenes) > 0:
+                level_means[str(level)] = {
+                    "count": len(level_scenes),
+                    "hue_mean": round(float(np.mean(hues[level_scenes])), 2),
+                    "saturation_mean": round(float(np.mean(saturations[level_scenes])), 2),
+                    "value_mean": round(float(np.mean(values[level_scenes])), 2),
+                    "hue_std": round(float(np.std(hues[level_scenes])), 2),
+                    "saturation_std": round(float(np.std(saturations[level_scenes])), 2),
+                    "value_std": round(float(np.std(values[level_scenes])), 2)
+                }
+        
+        # 해석
+        interpretation = {
+            "summary": f"Total {len(levels)} scene analysis results",
+            "key_findings": []
+        }
+        
+        # Value 해석
+        if corr_v["significance"] == "significant":
+            interpretation["key_findings"].append(
+                f"Positivity level and brightness (V) show a {corr_v['strength']} {corr_v['direction']} correlation (r={corr_v['r']}, p={corr_v['p']})"
+            )
+        
+        # Saturation 해석
+        if corr_s["significance"] == "significant":
+            interpretation["key_findings"].append(
+                f"Positivity level and saturation (S) show a {corr_s['strength']} {corr_s['direction']} correlation (r={corr_s['r']}, p={corr_s['p']})"
+            )
+        
+        # Hue 해석
+        if corr_h["significance"] == "significant":
+            interpretation["key_findings"].append(
+                f"Positivity level and hue (H) show a {corr_h['strength']} {corr_h['direction']} correlation (r={corr_h['r']}, p={corr_h['p']})"
+            )
+        
+        if not interpretation["key_findings"]:
+            interpretation["key_findings"].append("No significant correlation found.")
+        
+        return JsonResponse({
+            "correlation": {
+                "hue": corr_h,
+                "saturation": corr_s,
+                "value": corr_v
+            },
+            "regression": {
+                "saturation": reg_s,
+                "value": reg_v
+            },
+            "level_means": level_means,
+            "sample_size": len(levels),
+            "interpretation": interpretation
+        })
+    
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@require_http_methods(["GET"])
+def export_scenes_csv(request):
+    """
+    장면 데이터를 CSV로 내보내기
+    
+    GET /api/export/scenes-csv/
+    
+    Returns: CSV file
+    Headers: ID, Movie Title, Positivity Level, Hue, Saturation, Value, Upload Date
+    """
+    try:
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = 'attachment; filename="cinematic_scenes.csv"'
+        
+        writer = csv.writer(response)
+        writer.writerow(['ID', 'Movie Title', 'Positivity Level', 'Dominant Hue', 'Avg Saturation', 'Avg Value', 'Upload Date'])
+        
+        scenes = Scene.objects.all().order_by('-uploaded_at')
+        for scene in scenes:
+            writer.writerow([
+                scene.id,
+                scene.movie_title,
+                scene.positivity_level,
+                scene.dom_h if scene.dom_h is not None else '',
+                round(scene.avg_s, 4) if scene.avg_s is not None else '',
+                round(scene.avg_v, 4) if scene.avg_v is not None else '',
+                scene.uploaded_at.strftime('%Y-%m-%d %H:%M:%S')
+            ])
+        
+        return response
+    
+    except Exception as e:
+        return HttpResponse(f"Error: {str(e)}", status=500)
+
+
+@require_http_methods(["GET"])
+def export_aggregates_csv(request):
+    """
+    레벨별 통계 데이터를 CSV로 내보내기
+    
+    GET /api/export/aggregates-csv/
+    
+    Returns: CSV file
+    Headers: Positivity Level, Count, S Min, S Max, S Avg, V Min, V Max, V Avg
+    """
+    try:
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = 'attachment; filename="cinematic_aggregates.csv"'
+        
+        writer = csv.writer(response)
+        writer.writerow(['Positivity Level', 'Count', 'S Min', 'S Max', 'S Avg', 'V Min', 'V Max', 'V Avg'])
+        
+        aggregates = get_aggregates_by_level(Scene.objects.all())
+        
+        for level in range(1, 10):
+            agg = aggregates[level]
+            if agg["count"] > 0:
+                writer.writerow([
+                    level,
+                    agg["count"],
+                    round(agg["sMin"], 4) if agg["sMin"] is not None else '',
+                    round(agg["sMax"], 4) if agg["sMax"] is not None else '',
+                    round(agg["sAvg"], 4) if agg["sAvg"] is not None else '',
+                    round(agg["vMin"], 4) if agg["vMin"] is not None else '',
+                    round(agg["vMax"], 4) if agg["vMax"] is not None else '',
+                    round(agg["vAvg"], 4) if agg["vAvg"] is not None else ''
+                ])
+        
+        return response
+    
+    except Exception as e:
+        return HttpResponse(f"Error: {str(e)}", status=500)

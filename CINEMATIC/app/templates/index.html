@@ -1,15 +1,20 @@
 {% load static %}
 <!doctype html>
-<html lang="ko">
+<html lang="en-US">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Cinematic Emotion Lab</title>
-
-  <link rel="stylesheet" href="{% static 'app/css/style.css' %}?v=3">
+  <title>CIEV</title>
+  
+  <link rel="stylesheet" href="{% static 'app/css/style.css' %}?v=5">
+  
+  <!-- Favicon - Using existing image as fallback until multi-size versions are created -->
+  <link rel="icon" type="image/png" href="{% static 'app/images/favicon_001.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'app/images/favicon_001.png' %}">
+  
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.150.1/three.min.js"></script>
-  <script src="{% static 'app/js/script.js' %}?v=14"></script>
+  <script src="{% static 'app/js/script.js' %}?v=22"></script>
 
 </head>
 
@@ -22,7 +27,11 @@
     <section class="hero" id="top">
       <div class="hero__inner">
         <div class="hero__kicker">MOVIE COLOR ARCHIVE</div>
-        <h1 class="hero__title">Cinematic Image<br/>Emotional Visualization</h1>
+        <div class="hero__title-container">
+          <img src="{% static 'app/images/favicon_001.png' %}" alt="CIEV" class="hero__logo">
+          <h1 class="hero__title">CIEV</h1>
+        </div>
+        <div class="hero__desc">Cinematic Image Emotional Visualization</div>
       </div>
     </section>
 
@@ -34,24 +43,24 @@
 
       <div class="grid2">
         <div class="card">
-          <div class="card__title">포스터 업로드</div>
+          <div class="card__title">Upload Poster</div>
           <div class="uploader">
             <input class="uploader__input" type="file" id="posterInput" accept="image/*" />
             <label class="uploader__label" for="posterInput">
-              <span class="uploader__labelText">포스터 이미지 선택</span>
-              <span class="uploader__fileName" id="posterFileName">선택된 파일 없음</span>
+              <span class="uploader__labelText">Select Poster Image</span>
+              <span class="uploader__fileName" id="posterFileName">No file selected</span>
             </label>
 
-            <div class="status" id="posterStatus">상태: 대기</div>
+            <div class="status" id="posterStatus">Status: Waiting</div>
 
             <button class="btn btn--primary posterAction" id="analyzePosterBtn">
-                포스터 색 분석 & 행성 반영
+                Analyze Poster Colors & Apply to Planets
             </button>
           </div>
         </div>
 
         <div class="card">
-          <div class="card__title">분석 결과</div>
+          <div class="card__title">Analysis Result</div>
           <div class="posterPreview">
             <div class="posterPreview__frame" id="posterPreviewFrame">
               <div class="posterPreview__placeholder">Poster preview</div>
@@ -59,7 +68,7 @@
             </div>
 
             <div class="palette">
-              <div class="palette__title">대표 Hue 팔레트</div>
+              <div class="palette__title">Dominant Hue Palette</div>
               <div class="palette__spectrum">
                 <canvas id="paletteSpectrumCanvas" width="800" height="80"></canvas>
               </div>
@@ -67,7 +76,7 @@
                 <!-- swatches injected -->
               </div>
               <div class="palette__note">
-                * 팔레트는 포스터 픽셀에서 Hue 히스토그램을 계산해 상위 색을 추출합니다.
+                * The palette is extracted from the Hue histogram of the poster pixels.
               </div>
             </div>
           </div>
@@ -79,10 +88,6 @@
     <section class="section" id="planets">
       <header class="section__head">
         <h2 class="section__title">Emotion Planets</h2>
-        <p class="section__subtitle">
-          긍부정도(1~9)에 따라 9개 행성이 존재하며, 각 행성은 자기 궤도(완전한 원)에서 지속적으로 움직입니다.
-          포스터의 컬러 스펙트럼이 행성 색에 반영됩니다.
-        </p>
       </header>
 
       <div class="card card--wide">
@@ -99,10 +104,6 @@
     <section class="section" id="scene">
       <header class="section__head">
         <h2 class="section__title">Scene Upload & Positivity Label</h2>
-        <p class="section__subtitle">
-          영화 장면 이미지를 업로드하고 긍부정도(1~9)를 부여해 데이터셋 수집에 기여합니다.
-          업로드된 장면은 즉시 누적(S/V) 데이터에 반영되며 갤러리에 추가됩니다.
-        </p>
       </header>
 
       <div class="card">
@@ -125,25 +126,25 @@
           
                   <!-- 1. Scene image (Multiple files supported) -->
                   <div class="field">
-                    <label class="field__label" for="sceneInput">Scene image (다중 선택 가능)</label>
+                    <label class="field__label" for="sceneInput">Scene image</label>
                     <input class="field__file" type="file" id="sceneInput" accept="image/*" multiple />
                     <div class="fileMeta">
-                      <span class="fileMeta__label">선택됨:</span>
-                      <span class="fileMeta__name" id="sceneFileName">없음</span>
+                      <span class="fileMeta__label">Selected:</span>
+                      <span class="fileMeta__name" id="sceneFileName">No file selected</span>
                     </div>
                   </div>
           
                   <!-- 2. Movie title -->
                   <div class="field">
-                    <label class="field__label" for="movieTitle">영화 제목</label>
-                    <input class="field__input" id="movieTitle" type="text" placeholder="예: Titanic" />
+                    <label class="field__label" for="movieTitle">Movie Title</label>
+                    <input class="field__input" id="movieTitle" type="text" placeholder="Example: Titanic" />
                   </div>
           
                   <!-- 3. Positivity -->
                   <div class="field">
-                    <label class="field__label" for="positivitySelect">긍부정도 (1~9)</label>
+                    <label class="field__label" for="positivitySelect">Positivity (1~9)</label>
                     <select class="field__select" id="positivitySelect">
-                      <option value="" disabled selected>선택</option>
+                      <option value="" disabled selected>Select</option>
                       <option>1</option><option>2</option><option>3</option>
                       <option>4</option><option>5</option><option>6</option>
                       <option>7</option><option>8</option><option>9</option>
@@ -152,13 +153,13 @@
           
                   <!-- 4. Status -->
                   <div class="status status--block" id="sceneStatus">
-                    상태: 대기
+                    Status: Waiting
                   </div>
           
                   <!-- 5. Buttons -->
                   <div class="sceneActions">
-                    <button class="btn btn--primary" type="submit">장면 업로드</button>
-                    <button class="btn btn--danger" type="button" id="resetAllBtn">전체 초기화</button>
+                    <button class="btn btn--primary" type="submit">Upload Scene</button>
+                    <button class="btn btn--danger" type="button" id="resetAllBtn">Reset All</button>
                   </div>
           
                 </div>
@@ -167,19 +168,85 @@
           </div>
     </section>
 
+    <!-- STATISTICAL ANALYSIS -->
+    <section class="section" id="statistics">
+      <header class="section__head">
+        <h2 class="section__title">Statistical Analysis</h2>
+      </header>
+
+      <div class="grid2">
+        <!-- Summary Widget -->
+        <div class="card">
+          <div class="card__title">Total Statistics Summary</div>
+          <div class="statsWidget" id="statsWidget">
+            <div class="statsWidget__item">
+              <div class="statsWidget__label">Total Scenes</div>
+              <div class="statsWidget__value" id="statTotalScenes">-</div>
+            </div>
+            <div class="statsWidget__item">
+              <div class="statsWidget__label">Average Positivity</div>
+              <div class="statsWidget__value" id="statAvgLevel">-</div>
+            </div>
+            <div class="statsWidget__item">
+              <div class="statsWidget__label">Average Saturation (S)</div>
+              <div class="statsWidget__value" id="statAvgS">-</div>
+            </div>
+            <div class="statsWidget__item">
+              <div class="statsWidget__label">Average Value (V)</div>
+              <div class="statsWidget__value" id="statAvgV">-</div>
+            </div>
+          </div>
+
+          <div class="card__title card__title--mt">Export Data</div>
+          <div class="exportButtons">
+            <button class="btn btn--secondary" id="exportScenesCSV">
+              <span>📊</span> Download Scene Data CSV
+            </button>
+            <button class="btn btn--secondary" id="exportAggregatesCSV">
+              <span>📈</span> Download Statistics Data CSV
+            </button>
+            <button class="btn btn--secondary" id="exportJSON">
+              <span>💾</span> Download All JSON
+            </button>
+          </div>
+        </div>
+
+        <!-- Correlation Analysis -->
+        <div class="card">
+          <div class="card__title">Correlation Analysis</div>
+          <div class="correlationSection" id="correlationSection">
+            <button class="btn btn--primary" id="analyzeCorrelationBtn">
+              Run Correlation Analysis
+            </button>
+            <div class="correlationResults" id="correlationResults" style="display: none;">
+              <div class="correlationItem">
+                <div class="correlationItem__title">Hue</div>
+                <div class="correlationItem__stats" id="corrHue"></div>
+              </div>
+              <div class="correlationItem">
+                <div class="correlationItem__title">Saturation</div>
+                <div class="correlationItem__stats" id="corrSaturation"></div>
+              </div>
+              <div class="correlationItem">
+                <div class="correlationItem__title">Value</div>
+                <div class="correlationItem__stats" id="corrValue"></div>
+              </div>
+              <div class="correlationInterpretation" id="corrInterpretation"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- DATA VIS -->
     <section class="section" id="data">
       <header class="section__head">
         <h2 class="section__title">Positivity-Level Color Distribution Visualization</h2>
-        <p class="section__subtitle">
-          업로드된 장면 이미지에서 추출한 HSV의 S/V(채도/명도)를 레벨별로 누적합니다.
-          표(정형화 데이터) + 그래프(요약 시각화)를 동시에 제공합니다.
-        </p>
       </header>
 
       <div class="dataGrid">
         <div class="card">
-          <div class="card__title">SV 누적 현황 (Positivity 1~9)</div>
+          <div class="card__title">SV Accumulation Status (Positivity 1~9)</div>
           <div class="tableWrap">
             <table class="dataTable" id="svTable">
               <thead>
@@ -201,12 +268,12 @@
           </div>
           <div class="tableFoot">
             <span class="dot" id="filterDot"></span>
-            <span id="filterText">필터: 전체(ALL)</span>
+            <span id="filterText">Filter: All (ALL)</span>
           </div>
         </div>
 
         <div class="card">
-          <div class="card__title">Count (업로드 개수)</div>
+          <div class="card__title">Count (Upload Count)</div>
           <div class="chartWrap">
             <canvas id="countChart" width="900" height="240" aria-label="count chart"></canvas>
           </div>
@@ -223,23 +290,20 @@
     <section class="section" id="gallery">
       <header class="section__head">
         <h2 class="section__title">Scene Gallery</h2>
-        <p class="section__subtitle">
-          Shows collected movie scenes individually in gallery format. Level filters/search/alignments are possible.
-        </p>
       </header>
 
       <div class="card card--wide">
         <div class="galleryToolbar">
           <div class="galleryToolbar__left">
-            <input class="search" id="gallerySearch" type="text" placeholder="영화 제목으로 검색 (예: Titanic)" />
+            <input class="search" id="gallerySearch" type="text" placeholder="Search by Movie Title (Example: Titanic)" />
           </div>
 
           <div class="galleryToolbar__right">
             <select class="selectSmall" id="gallerySort">
-              <option value="newest" selected>최신순</option>
-              <option value="oldest">오래된순</option>
-              <option value="levelHigh">긍부정도 높은순</option>
-              <option value="levelLow">긍부정도 낮은순</option>
+              <option value="newest" selected>Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="levelHigh">Highest Positivity</option>
+              <option value="levelLow">Lowest Positivity</option>
             </select>
 
             <!-- End of Selection -->
@@ -251,14 +315,19 @@
         </div>
 
         <div class="empty" id="galleryEmpty">
-          아직 업로드된 장면이 없습니다. Scene 섹션에서 장면을 업로드해 주세요.
+          No scenes uploaded yet. Please upload scenes in the Scene section.
+        </div>
+
+        <div class="galleryLoading" id="galleryLoading" style="display: none; text-align: center; padding: 2rem; color: var(--text-muted);">
+          <div class="spinner" style="display: inline-block; width: 20px; height: 20px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <div style="margin-top: 0.5rem;">Loading more images...</div>
         </div>
       </div>
     </section>
 
     <footer class="footer">
       <div class="footer__inner">
-        <div>© Cinematic Emotion Lab — FE Prototype</div>
+        <div>© CIEV</div>
         <button class="btn btn--ghost" id="backToTopBtn" type="button">Back to top</button>
       </div>
     </footer>

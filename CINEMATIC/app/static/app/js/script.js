@@ -6,22 +6,24 @@
   let sceneForm, movieTitleInput, positivitySelect, sceneInput;
   let sceneFileName, sceneStatus, scenePreviewImg, scenePreviewFrame, sceneSelectedBadge;
   let svTableBody, countChart, svChart;
-  let galleryGrid, galleryEmpty, gallerySearch, gallerySort, galleryFilterChip;
+  let galleryGrid, galleryEmpty, gallerySearch, gallerySort, galleryFilterChip, galleryLoading;
   let exportJsonBtn, resetAllBtn, backToTopBtn;
   let workCanvas, wctx;
 
   // ---------- STATE ----------
   const LS_KEY = "celab_v1";
   const DEFAULT_BASE_PALETTE = [
-    // fallback if no poster
-    { h: 250, s: 0.62, v: 0.70 }, // violet
-    { h: 285, s: 0.58, v: 0.70 }, // purple
-    { h: 320, s: 0.55, v: 0.70 }, // magenta
-    { h: 180, s: 0.45, v: 0.65 }, // teal
-    { h: 40,  s: 0.45, v: 0.72 }, // warm
+    // fallback if no poster (10 colors for full spectrum coverage)
+    { h: 0,   s: 0.60, v: 0.70 }, // red
+    { h: 30,  s: 0.55, v: 0.72 }, // orange
+    { h: 60,  s: 0.50, v: 0.68 }, // yellow
+    { h: 120, s: 0.45, v: 0.65 }, // green
+    { h: 180, s: 0.45, v: 0.65 }, // cyan/teal
     { h: 210, s: 0.50, v: 0.62 }, // blue
-    { h: 15,  s: 0.55, v: 0.70 }, // orange-red
-    { h: 95,  s: 0.45, v: 0.62 }, // green
+    { h: 240, s: 0.58, v: 0.68 }, // indigo
+    { h: 270, s: 0.60, v: 0.70 }, // violet
+    { h: 300, s: 0.55, v: 0.70 }, // purple
+    { h: 330, s: 0.58, v: 0.70 }, // magenta
   ];
 
   const state = {
@@ -29,7 +31,14 @@
     planets: [],
     scenes: [],
     aggregates: makeEmptyAggregates(),
-    lastPosterDataURL: null
+    lastPosterDataURL: null,
+    // Gallery pagination
+    gallery: {
+      allItems: [],        // Filtered & sorted items
+      loadedCount: 0,      // Number of items currently rendered
+      itemsPerPage: 50,    // Load 50 items at a time
+      isLoading: false     // Prevent multiple simultaneous loads
+    }
   };  
   
 
@@ -105,6 +114,7 @@
     gallerySearch = document.getElementById("gallerySearch");
     gallerySort = document.getElementById("gallerySort");
     galleryFilterChip = document.getElementById("galleryFilterChip");
+    galleryLoading = document.getElementById("galleryLoading");
     exportJsonBtn = document.getElementById("exportJsonBtn");
     resetAllBtn = document.getElementById("resetAllBtn");
 
@@ -191,18 +201,18 @@
   function initUI() {
     posterInput.addEventListener("change", () => {
       const f = posterInput.files?.[0];
-      posterFileName.textContent = f ? f.name : "선택된 파일 없음";
-      posterStatus.textContent = "상태: 포스터 파일 선택됨 (분석 버튼을 눌러 반영)";
+      posterFileName.textContent = f ? f.name : "No file selected";
+      posterStatus.textContent = "Status: Poster file selected (Analyze button to apply)";
       setPosterPreview(f, posterPreviewImg, posterPreviewFrame);
     });
 
     analyzePosterBtn.addEventListener("click", async () => {
       const f = posterInput.files?.[0];
       if (!f) {
-        posterStatus.textContent = "상태: 포스터 파일을 먼저 선택해 주세요.";
+        posterStatus.textContent = "Status: Please select a poster file first.";
         return;
       }
-      posterStatus.textContent = "상태: 업로드 중… (백엔드 서버로 전송)";
+      posterStatus.textContent = "Status: Uploading… (Sending to backend server)";
       analyzePosterBtn.disabled = true;
 
       try {
@@ -216,7 +226,7 @@
         });
         
         if (!response.ok) {
-          throw new Error('백엔드 업로드 실패');
+          throw new Error('Backend upload failed');
         }
         
         const data = await response.json();
@@ -225,15 +235,15 @@
           state.basePalette = data.palette;
           renderPaletteSwatches(state.basePalette);
           applyPaletteToPlanets();
-          posterStatus.textContent = "상태: 완료 — 행성 컬러 스펙트럼에 반영됨";
+          posterStatus.textContent = "Status: Completed — Applied to planet color spectrum";
           saveToStorage();
           console.log('✓ Poster uploaded, ID:', data.poster_id);
         } else {
-          throw new Error('팔레트 추출 실패');
+          throw new Error('Palette extraction failed');
         }
       } catch (e) {
         console.error('Poster upload failed:', e);
-        posterStatus.textContent = `상태: 실패 — ${e.message}`;
+        posterStatus.textContent = `Status: Failed — ${e.message}`;
       } finally {
         analyzePosterBtn.disabled = false;
       }
@@ -244,15 +254,15 @@
       const fileCount = files?.length || 0;
       
       if (fileCount === 0) {
-        sceneFileName.textContent = "없음";
+        sceneFileName.textContent = "No file selected";
         sceneSelectedBadge.classList.remove("scenePreview__badge--on");
-        sceneStatus.textContent = "상태: 대기";
+        sceneStatus.textContent = "Status: Waiting";
         hidePreview(scenePreviewImg, scenePreviewFrame);
         return;
       }
 
       // Display file count
-      sceneFileName.textContent = fileCount === 1 ? files[0].name : `${fileCount}개 파일 선택됨`;
+      sceneFileName.textContent = fileCount === 1 ? files[0].name : `${fileCount} files selected`;
       sceneSelectedBadge.classList.add("scenePreview__badge--on");
 
       // If single file, auto-fill from filename
@@ -262,14 +272,14 @@
         if (meta) {
           movieTitleInput.value = meta.title;
           positivitySelect.value = String(meta.level);
-          sceneStatus.textContent = `상태: 파일명에서 "${meta.title}" / Level ${meta.level} 자동 입력됨`;
+          sceneStatus.textContent = `Status: Automatically inputted from filename "${meta.title}" / Level ${meta.level}`;
         } else {
-          sceneStatus.textContent = "상태: 장면 파일 선택됨 (업로드하면 누적 반영)";
+          sceneStatus.textContent = "Status: Scene file selected (Uploaded data will be accumulated)";
         }
         setPosterPreview(f, scenePreviewImg, scenePreviewFrame);
       } else {
         // Multiple files
-        sceneStatus.textContent = `상태: ${fileCount}개 파일 선택됨. 파일명에서 자동으로 제목/레벨 추출됩니다.`;
+        sceneStatus.textContent = `Status: ${fileCount} files selected. Automatically extracted from filename.`;
         // Show first file preview
         setPosterPreview(files[0], scenePreviewImg, scenePreviewFrame);
       }
@@ -282,21 +292,21 @@
       const file = sceneInput.files?.[0];
 
       if (!title) {
-        sceneStatus.textContent = "상태: 영화 제목을 입력해 주세요.";
+        sceneStatus.textContent = "Status: Please enter the movie title.";
         return;
       }
       if (!levelStr) {
-        sceneStatus.textContent = "상태: 긍부정도(1~9)를 선택해 주세요.";
+        sceneStatus.textContent = "Status: Please select the positivity level (1~9).";
         return;
       }
       if (!file) {
-        sceneStatus.textContent = "상태: 장면 이미지를 선택해 주세요.";
+        sceneStatus.textContent = "Status: Please select the scene image.";
         return;
       }
 
       const level = Number(levelStr);
 
-      sceneStatus.textContent = "상태: 업로드 중… (백엔드 서버로 전송)";
+      sceneStatus.textContent = "Status: Uploading… (Sending to backend server)";
       try {
         console.log('Starting single file upload:', file.name);
         
@@ -312,7 +322,7 @@
         });
         
         if (!response.ok) {
-          throw new Error('백엔드 업로드 실패');
+          throw new Error('Backend upload failed');
         }
         
         const data = await response.json();
@@ -327,18 +337,18 @@
           // Update planet colors based on new data
           applyPaletteToPlanets();
           
-          sceneStatus.textContent = "상태: 완료 — 누적 데이터 & 갤러리에 반영됨";
+          sceneStatus.textContent = "Status: Completed — Accumulated data & reflected in gallery";
           
           // Reset form
           sceneInput.value = "";
-          sceneFileName.textContent = "없음";
+          sceneFileName.textContent = "No file selected";
           sceneSelectedBadge.classList.remove("scenePreview__badge--on");
         } else {
-          throw new Error(data.error || '업로드 실패');
+          throw new Error(data.error || 'Upload failed');
         }
       } catch (e) {
         console.error('Single file upload failed:', e);
-        sceneStatus.textContent = `상태: 실패 — ${e.message}`;
+        sceneStatus.textContent = `Status: Failed — ${e.message}`;
       }
     });
 
@@ -347,7 +357,7 @@
       let successCount = 0;
       let errorCount = 0;
 
-      sceneStatus.textContent = `상태: ${totalFiles}개 파일 업로드 중... (0/${totalFiles})`;
+      sceneStatus.textContent = `Status: ${totalFiles} files uploading... (0/${totalFiles})`;
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -375,7 +385,7 @@
           });
           
           if (!response.ok) {
-            throw new Error('백엔드 업로드 실패');
+            throw new Error('Backend upload failed');
           }
           
           const data = await response.json();
@@ -384,10 +394,10 @@
             successCount++;
             console.log(`✓ Uploaded ${file.name} (${title}, Level ${level})`);
           } else {
-            throw new Error(data.error || '업로드 실패');
+            throw new Error(data.error || 'Upload failed');
           }
 
-          sceneStatus.textContent = `상태: 업로드 중... (${i + 1}/${totalFiles}) - ${file.name}`;
+          sceneStatus.textContent = `Status: Uploading... (${i + 1}/${totalFiles}) - ${file.name}`;
 
         } catch (err) {
           console.error(`Error uploading ${file.name}:`, err);
@@ -402,10 +412,10 @@
       // Update planet colors based on new data
       applyPaletteToPlanets();
 
-      sceneStatus.textContent = `상태: 완료 — ${successCount}개 성공, ${errorCount}개 실패 (총 ${totalFiles}개)`;
+      sceneStatus.textContent = `Status: Completed — ${successCount} success, ${errorCount} failure (Total ${totalFiles} files)`;
 
       sceneInput.value = "";
-      sceneFileName.textContent = "없음";
+      sceneFileName.textContent = "No file selected";
       sceneSelectedBadge.classList.remove("scenePreview__badge--on");
     }
 
@@ -420,6 +430,22 @@
         renderGallery();
       });
     }
+
+    // Infinite scroll for gallery
+    window.addEventListener("scroll", () => {
+      if (!galleryGrid || state.gallery.isLoading) return;
+      
+      const gallerySection = document.getElementById("gallery");
+      if (!gallerySection) return;
+      
+      const sectionRect = gallerySection.getBoundingClientRect();
+      const windowHeight = window.innerHeight;
+      
+      // Trigger load when scrolled near bottom of gallery section (within 500px)
+      if (sectionRect.bottom < windowHeight + 500) {
+        loadMoreGalleryItems();
+      }
+    });
 
     if (exportJsonBtn) {
       exportJsonBtn.addEventListener("click", () => {
@@ -449,14 +475,14 @@
 
     if (resetAllBtn) {
       resetAllBtn.addEventListener("click", () => {
-        if (!confirm("모든 업로드/누적 데이터를 초기화할까요?")) return;
+        if (!confirm("Are you sure you want to reset all uploads/accumulated data?")) return;
         state.scenes = [];
         state.aggregates = makeEmptyAggregates();
         if (gallerySearch) gallerySearch.value = "";
         if (gallerySort) gallerySort.value = "newest";
         rebuildAll();
         saveToStorage();
-        if (sceneStatus) sceneStatus.textContent = "상태: 전체 초기화 완료";
+        if (sceneStatus) sceneStatus.textContent = "Status: All reset completed";
       });
     }
 
@@ -464,6 +490,33 @@
       backToTopBtn.addEventListener("click", () => {
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
+    }
+
+    // Statistical Analysis
+    const analyzeCorrelationBtn = document.getElementById('analyzeCorrelationBtn');
+    if (analyzeCorrelationBtn) {
+      analyzeCorrelationBtn.addEventListener('click', analyzeCorrelation);
+    }
+
+    // Export buttons
+    const exportScenesCSV = document.getElementById('exportScenesCSV');
+    const exportAggregatesCSV = document.getElementById('exportAggregatesCSV');
+    const exportJSON = document.getElementById('exportJSON');
+
+    if (exportScenesCSV) {
+      exportScenesCSV.addEventListener('click', () => {
+        window.location.href = '/api/export/scenes-csv/';
+      });
+    }
+
+    if (exportAggregatesCSV) {
+      exportAggregatesCSV.addEventListener('click', () => {
+        window.location.href = '/api/export/aggregates-csv/';
+      });
+    }
+
+    if (exportJSON) {
+      exportJSON.addEventListener('click', downloadJSON);
     }
 
     // restore last poster preview if stored
@@ -521,10 +574,10 @@
 
     // Camera setup
     const aspect = orbitWrap.clientWidth / orbitWrap.clientHeight;
-    camera = new THREE.PerspectiveCamera(55, aspect, 0.1, 3000);
-    // Position camera to view the floating planets from optimal angle
-    // Slightly angled to see the 3D distribution better
-    camera.position.set(100, 280, 750);
+    camera = new THREE.PerspectiveCamera(33, aspect, 0.1, 3000);
+    // Position camera to view 3x3 grid
+    // Positioned in front, slightly above and to the right for better angle
+    camera.position.set(100, 250, 850);
     camera.lookAt(0, 0, 0);
 
     // Renderer setup
@@ -541,13 +594,13 @@
     scene.add(ambientLight);
 
     // Main directional light (sun-like)
-    const mainLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 0.5);
     mainLight.position.set(300, 300, 300);
     mainLight.castShadow = true;
     scene.add(mainLight);
 
     // Rim light for planet edges
-    const rimLight = new THREE.PointLight(0x6b8cff, 0.8);
+    const rimLight = new THREE.PointLight(0x6b8cff, 0.2);
     rimLight.position.set(-200, 100, -200);
     scene.add(rimLight);
 
@@ -568,29 +621,31 @@
     orbitLines = [];
 
     const orbitCount = 9;
-    const spacing = 150; // Space between planets
-    const startX = -(orbitCount - 1) * spacing / 2; // Center the distribution
+    const spacing = 180; // Space between planets (increased for better spacing)
+    const columns = 3; // 3 columns per row
 
-    // Build planets distributed in 3D space (floating in space)
+    // Build planets in 3x3 grid layout
+    // Row 1: 1, 2, 3
+    // Row 2: 4, 5, 6
+    // Row 3: 7, 8, 9
     for (let i = 1; i <= orbitCount; i++) {
-      const xPosition = startX + (i - 1) * spacing;
+      // Calculate grid position (3 columns x 3 rows)
+      const gridCol = (i - 1) % columns; // 0, 1, 2
+      const gridRow = Math.floor((i - 1) / columns); // 0, 1, 2
       
-      // Add Y and Z variation for 3D floating effect
-      // Create a curved path in 3D space
-      const angle = (i - 1) / (orbitCount - 1) * Math.PI * 1.2; // Curved distribution
-      const yPosition = Math.sin(angle) * 80 - 20; // Up and down variation
-      const zPosition = Math.cos(angle * 0.7) * 100 - 50; // Depth variation
+      // Position in 3D space (centered grid)
+      const xPosition = (gridCol - 1) * spacing; // -spacing, 0, +spacing
+      const yPosition = (1 - gridRow) * spacing; // +spacing, 0, -spacing (top to bottom)
+      const zPosition = 0; // All at same depth
       
-      const rotationSpeed = 0.001 + i * 0.0002; // Rotation speed (자전)
-      const size = 40 + i * 2.5; // Larger 3D sphere radius
+      const rotationSpeed = 0.0002 + i * 0.00004; // Rotation speed (self-rotation only, slower)
+      const size = 35 + i * 2.0; // Planet size increases with level
       const col = getLevelColor(i);
 
-      // Floating animation parameters (different for each planet)
-      const floatAmplitude = 15 + (i % 3) * 8; // How much it bobs up/down
-      const floatSpeed = 0.0003 + (i % 4) * 0.0002; // Speed of bobbing
-      const floatPhase = i * 0.7; // Phase offset for variety
-      const driftSpeed = 0.0001 + (i % 3) * 0.00008; // Slow drift
-      const driftAmplitude = 20 + (i % 4) * 10; // Drift distance
+      // Subtle floating animation parameters (gentle bobbing)
+      const floatAmplitude = 8 + (i % 3) * 3;
+      const floatSpeed = 0.0002 + (i % 4) * 0.0001; 
+      const floatPhase = i * 0.7; 
 
       state.planets.push({
         level: i,
@@ -604,8 +659,11 @@
         floatAmplitude,
         floatSpeed,
         floatPhase,
-        driftSpeed,
-        driftAmplitude
+        // Physics properties for collision
+        velocityX: 0,
+        velocityY: 0,
+        velocityZ: 0,
+        mass: size
       });
 
       // Create planet with striped texture
@@ -618,17 +676,21 @@
       planetMesh.userData.floatAmplitude = floatAmplitude;
       planetMesh.userData.floatSpeed = floatSpeed;
       planetMesh.userData.floatPhase = floatPhase;
-      planetMesh.userData.driftSpeed = driftSpeed;
-      planetMesh.userData.driftAmplitude = driftAmplitude;
+      // Physics properties
+      planetMesh.userData.velocityX = 0;
+      planetMesh.userData.velocityY = 0;
+      planetMesh.userData.velocityZ = 0;
+      planetMesh.userData.mass = size;
+      planetMesh.userData.radius = size;
       
-      // Set initial position (3D distributed)
+      // Set initial position in line
       planetMesh.position.set(xPosition, yPosition, zPosition);
       
       scene.add(planetMesh);
       planetMeshes.push(planetMesh);
     }
 
-    console.log(`Created ${planetMeshes.length} planets`);
+    console.log(`Created ${planetMeshes.length} planets in 3x3 grid layout`);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize);
@@ -782,60 +844,82 @@
   }
 
   function createPlanetMesh(radius, baseColor, level) {
-    // High-quality sphere geometry (increased segments for smoothness)
-    const geometry = new THREE.SphereGeometry(radius, 128, 128);
+    // Balanced sphere geometry (good quality + performance)
+    const geometry = new THREE.SphereGeometry(radius, 64, 64);
     
-    // Create high-res striped texture from palette
+    // Create optimized striped texture from palette
     const texture = createStripedTexture(level);
     
     // Create bump map for surface detail
-    const bumpMap = createBumpMap();
+    const bumpMap = createBumpMap(level);
+    
+    // Material properties based on REAL DATA (baseColor.s and baseColor.v)
+    // Higher saturation = smoother, more metallic
+    // Higher value = more emissive, more reflective
     
     const material = new THREE.MeshStandardMaterial({
       map: texture,
       bumpMap: bumpMap,
-      bumpScale: 0.5,
-      roughness: 0.6,
-      metalness: 0.2,
-      emissive: new THREE.Color().setHSL(baseColor.h / 360, baseColor.s * 0.8, baseColor.v * 0.15),
-      emissiveIntensity: 0.4,
-      envMapIntensity: 0.5
+      bumpScale: 0.8,
+      roughness: 0.85 - (baseColor.s * 0.5), // High saturation = smoother (0.85 → 0.35)
+      metalness: 0.10 + (baseColor.s * 0.25), // High saturation = more metallic (0.10 → 0.35)
+      emissive: new THREE.Color().setHSL(
+        baseColor.h / 360, 
+        baseColor.s * 0.6, // Reduced from 0.7
+        baseColor.v * (0.02 + baseColor.v * 0.10) // Reduced glow (was 0.05 + v*0.20)
+      ),
+      emissiveIntensity: 0.08 + (baseColor.v * 0.25), // DIMMED: 0.08 → 0.33 (was 0.15 → 0.65)
+      envMapIntensity: 0.15 + (baseColor.s * 0.25) + (baseColor.v * 0.20) // DIMMED reflectivity
     });
 
     const mesh = new THREE.Mesh(geometry, material);
     
-    // Add multi-layer glow effect for floating atmosphere
-    // Inner glow (강렬한 내부 발광)
-    const innerGlowGeometry = new THREE.SphereGeometry(radius * 1.08, 64, 64);
-    const innerGlowMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color().setHSL(baseColor.h / 360, baseColor.s * 0.9, baseColor.v * 1.1),
-      transparent: true,
-      opacity: 0.25,
-      side: THREE.BackSide
-    });
-    const innerGlowMesh = new THREE.Mesh(innerGlowGeometry, innerGlowMaterial);
-    mesh.add(innerGlowMesh);
+    // DIMMED: Atmosphere intensity based on REAL brightness (reduced)
+    const atmosphereIntensity = 0.4 + (baseColor.v * 0.5); // DIMMED (was 0.6 + v*0.8)
     
-    // Outer atmospheric glow (부드러운 외부 대기)
-    const outerGlowGeometry = new THREE.SphereGeometry(radius * 1.20, 64, 64);
-    const outerGlowMaterial = new THREE.MeshBasicMaterial({
-      color: new THREE.Color().setHSL(baseColor.h / 360, baseColor.s * 0.7, baseColor.v * 0.8),
+    // Layer 1: Inner glow (DIMMED)
+    const atmo1Geometry = new THREE.SphereGeometry(radius * 1.08, 32, 32);
+    const atmo1Material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setHSL(
+        baseColor.h / 360, 
+        baseColor.s * 0.8, // Reduced from 0.9
+        Math.min(1.0, baseColor.v * 0.8 * atmosphereIntensity) // Reduced from v*1.1
+      ),
       transparent: true,
-      opacity: 0.12,
+      opacity: 0.08 + (baseColor.v * 0.20), // DIMMED: 0.08 → 0.28 (was 0.15 → 0.50)
       side: THREE.BackSide,
-      blending: THREE.AdditiveBlending
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
-    const outerGlowMesh = new THREE.Mesh(outerGlowGeometry, outerGlowMaterial);
-    mesh.add(outerGlowMesh);
+    const atmo1Mesh = new THREE.Mesh(atmo1Geometry, atmo1Material);
+    mesh.add(atmo1Mesh);
     
-    // Distant halo (먼 거리에서 보이는 후광)
-    const haloGeometry = new THREE.SphereGeometry(radius * 1.35, 32, 32);
+    // Layer 2: Outer atmosphere (DIMMED)
+    const atmo2Geometry = new THREE.SphereGeometry(radius * 1.20, 32, 32);
+    const atmo2Material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setHSL(
+        baseColor.h / 360, 
+        baseColor.s * 0.6, // Reduced from 0.7
+        Math.min(1.0, baseColor.v * 0.6 * atmosphereIntensity) // Reduced from v*0.8
+      ),
+      transparent: true,
+      opacity: 0.05 + (baseColor.v * 0.15), // DIMMED: 0.05 → 0.20 (was 0.08 → 0.33)
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const atmo2Mesh = new THREE.Mesh(atmo2Geometry, atmo2Material);
+    mesh.add(atmo2Mesh);
+    
+    // Layer 3: Distant halo
+    const haloGeometry = new THREE.SphereGeometry(radius * 1.35, 24, 24);
     const haloMaterial = new THREE.MeshBasicMaterial({
       color: new THREE.Color().setHSL(baseColor.h / 360, baseColor.s * 0.5, baseColor.v * 0.6),
       transparent: true,
-      opacity: 0.06,
+      opacity: 0.08,
       side: THREE.BackSide,
-      blending: THREE.AdditiveBlending
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
     const haloMesh = new THREE.Mesh(haloGeometry, haloMaterial);
     mesh.add(haloMesh);
@@ -848,87 +932,248 @@
     return mesh;
   }
 
+  // Advanced Perlin-like noise function for natural textures
+  function noise2D(x, y, seed = 0) {
+    const n = Math.sin(x * 12.9898 + y * 78.233 + seed) * 43758.5453;
+    return n - Math.floor(n);
+  }
+
+  function smoothNoise(x, y, seed) {
+    const corners = (noise2D(x-1, y-1, seed) + noise2D(x+1, y-1, seed) + 
+                    noise2D(x-1, y+1, seed) + noise2D(x+1, y+1, seed)) / 16;
+    const sides = (noise2D(x-1, y, seed) + noise2D(x+1, y, seed) + 
+                  noise2D(x, y-1, seed) + noise2D(x, y+1, seed)) / 8;
+    const center = noise2D(x, y, seed) / 4;
+    return corners + sides + center;
+  }
+
+  function turbulence(x, y, size, seed) {
+    let value = 0;
+    let initialSize = size;
+    while(size >= 1) {
+      value += smoothNoise(x / size, y / size, seed) * size;
+      size /= 2.0;
+    }
+    return value / initialSize;
+  }
+
   function createStripedTexture(level) {
     const canvas = document.createElement('canvas');
-    canvas.width = 2048;  // High resolution
-    canvas.height = 2048;
+    canvas.width = 1024;  // Optimized resolution for performance
+    canvas.height = 1024;
     const ctx = canvas.getContext('2d');
 
     // Get palette colors
     const palette = state.basePalette;
-    const stripeCount = 16; // More stripes for detail
+    const stripeCount = 12; // Optimized stripe count
     const stripeHeight = canvas.height / stripeCount;
 
-    // Draw horizontal stripes using palette
+    // Get level color to determine SV adjustment based on REAL DATA
+    const levelColor = getLevelColor(level);
+    
+    // Use actual analyzed SV to influence texture
+    // Subtract base palette average to get the deviation
+    const paletteAvgS = palette.reduce((sum, c) => sum + c.s, 0) / palette.length;
+    const paletteAvgV = palette.reduce((sum, c) => sum + c.v, 0) / palette.length;
+    
+    // Calculate boost based on real data deviation
+    const levelSatBoost = (levelColor.s - paletteAvgS) * 0.8; // 80% of deviation
+    const levelValBoost = (levelColor.v - paletteAvgV) * 0.8; // 80% of deviation
+
+    // Create base layer with advanced gradients
     for (let i = 0; i < stripeCount; i++) {
       const paletteIndex = i % palette.length;
       const col = palette[paletteIndex];
       
-      // Add some variation for depth
-      const variation = (Math.sin(i * 0.7) * 0.12);
+      // Complex variation using multiple sine waves
+      const variation1 = Math.sin(i * 0.7) * 0.12;
+      const variation2 = Math.cos(i * 1.3 + level) * 0.08;
       const h = col.h;
-      const s = Math.max(0, Math.min(1, col.s + variation));
-      const v = Math.max(0.2, Math.min(1, col.v + variation * 0.5));
       
-      ctx.fillStyle = hsvToCss({ h, s, v });
-      ctx.fillRect(0, i * stripeHeight, canvas.width, stripeHeight);
+      // Apply level-based adjustments with DIMMED brightness
+      const s = Math.max(0.1, Math.min(1, col.s + variation1 + variation2 + levelSatBoost));
+      const v = Math.max(0.10, Math.min(0.70, (col.v + variation1 * 0.5 + levelValBoost) * 0.7)); // DIMMED: max 0.70, ×0.7
       
-      // Add sophisticated gradient within stripe for 3D effect
-      const gradient = ctx.createLinearGradient(0, i * stripeHeight, 0, (i + 1) * stripeHeight);
-      gradient.addColorStop(0, `rgba(255,255,255,${0.15 * Math.random()})`);
-      gradient.addColorStop(0.3, 'rgba(255,255,255,0)');
-      gradient.addColorStop(0.7, 'rgba(0,0,0,0)');
-      gradient.addColorStop(1, `rgba(0,0,0,${0.2 * Math.random()})`);
+      // Create complex multi-stop gradient for each stripe
+      const gradient = ctx.createLinearGradient(0, i * stripeHeight, canvas.width, i * stripeHeight);
+      
+      // Main color with horizontal variation (DIMMED)
+      for (let stop = 0; stop <= 10; stop++) {
+        const stopPos = stop / 10;
+        const turbVal = turbulence(stopPos * 10, i, 32, level) * 0.12; // Reduced from 0.15
+        const adjustedV = Math.max(0.12, Math.min(0.65, v + turbVal * 0.6)); // DIMMED: max 0.65
+        const adjustedS = Math.max(0.2, Math.min(1, s + turbVal * 0.4)); // Slightly reduced
+        gradient.addColorStop(stopPos, hsvToCss({ h, s: adjustedS, v: adjustedV }));
+      }
+      
       ctx.fillStyle = gradient;
       ctx.fillRect(0, i * stripeHeight, canvas.width, stripeHeight);
       
-      // Add noise for texture detail
-      for (let n = 0; n < 50; n++) {
-        const x = Math.random() * canvas.width;
-        const y = i * stripeHeight + Math.random() * stripeHeight;
-        const opacity = Math.random() * 0.1;
-        ctx.fillStyle = `rgba(255,255,255,${opacity})`;
-        ctx.fillRect(x, y, 2, 2);
+      // Add sophisticated inner gradient for depth
+      const depthGradient = ctx.createLinearGradient(0, i * stripeHeight, 0, (i + 1) * stripeHeight);
+      depthGradient.addColorStop(0, `rgba(255,255,255,${0.2})`);
+      depthGradient.addColorStop(0.15, 'rgba(255,255,255,0.05)');
+      depthGradient.addColorStop(0.5, 'rgba(0,0,0,0)');
+      depthGradient.addColorStop(0.85, 'rgba(0,0,0,0.05)');
+      depthGradient.addColorStop(1, `rgba(0,0,0,${0.25})`);
+      ctx.fillStyle = depthGradient;
+      ctx.fillRect(0, i * stripeHeight, canvas.width, stripeHeight);
+    }
+
+    // Add procedural noise layer (optimized)
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let y = 0; y < canvas.height; y += 4) {
+      for (let x = 0; x < canvas.width; x += 4) {
+        const idx = (y * canvas.width + x) * 4;
+        const noiseVal = turbulence(x / 80, y / 80, 64, level + 100) * 25;
+        imageData.data[idx] += noiseVal;
+        imageData.data[idx + 1] += noiseVal;
+        imageData.data[idx + 2] += noiseVal;
       }
     }
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.anisotropy = 16; // High quality filtering
-    return texture;
-  }
-
-  function createBumpMap() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const ctx = canvas.getContext('2d');
-    
-    // Create noise pattern for surface detail
-    const imageData = ctx.createImageData(canvas.width, canvas.height);
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      const noise = Math.random() * 255;
-      imageData.data[i] = noise;     // R
-      imageData.data[i + 1] = noise; // G
-      imageData.data[i + 2] = noise; // B
-      imageData.data[i + 3] = 255;   // A
-    }
     ctx.putImageData(imageData, 0, 0);
-    
-    // Add circular patterns for more detail
-    for (let i = 0; i < 30; i++) {
+
+    // Add atmospheric scattering effect (lighter at edges)
+    const atmosphereGradient = ctx.createRadialGradient(
+      canvas.width / 2, canvas.height / 2, canvas.width * 0.3,
+      canvas.width / 2, canvas.height / 2, canvas.width * 0.6
+    );
+    atmosphereGradient.addColorStop(0, 'rgba(255,255,255,0)');
+    atmosphereGradient.addColorStop(0.7, 'rgba(255,255,255,0.02)');
+    atmosphereGradient.addColorStop(1, 'rgba(200,220,255,0.08)');
+    ctx.fillStyle = atmosphereGradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Add surface features (craters, storms, clouds)
+    for (let n = 0; n < 30; n++) {
       const x = Math.random() * canvas.width;
       const y = Math.random() * canvas.height;
-      const radius = Math.random() * 50 + 10;
-      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-      gradient.addColorStop(0, 'rgba(255,255,255,0.3)');
-      gradient.addColorStop(1, 'rgba(0,0,0,0.3)');
-      ctx.fillStyle = gradient;
+      const radius = Math.random() * 80 + 20;
+      const opacity = Math.random() * 0.15 + 0.05;
+      
+      const featureGradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      featureGradient.addColorStop(0, `rgba(255,255,255,${opacity})`);
+      featureGradient.addColorStop(0.4, `rgba(200,200,255,${opacity * 0.5})`);
+      featureGradient.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = featureGradient;
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // Add swirl patterns for gas giant effect
+    ctx.globalAlpha = 0.1;
+    for (let s = 0; s < 8; s++) {
+      const startY = Math.random() * canvas.height;
+      const amplitude = Math.random() * 100 + 50;
+      const frequency = Math.random() * 0.01 + 0.005;
+      
+      ctx.beginPath();
+      ctx.moveTo(0, startY);
+      for (let x = 0; x < canvas.width; x += 10) {
+        const y = startY + Math.sin(x * frequency + level) * amplitude;
+        ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = Math.random() * 3 + 1;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1.0;
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = 16; // Maximum anisotropic filtering
+    return texture;
+  }
+
+  function createBumpMap(level) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;  // Optimized resolution
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    
+    // Create optimized noise for terrain
+    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    
+    for (let y = 0; y < canvas.height; y += 2) {
+      for (let x = 0; x < canvas.width; x += 2) {
+        const idx = (y * canvas.width + x) * 4;
+        
+        // Simplified noise calculation
+        const noise1 = turbulence(x / 30, y / 30, 32, level) * 0.6;
+        const noise2 = smoothNoise(x / 100, y / 100, level) * 0.4;
+        
+        const combined = (noise1 + noise2) * 255;
+        const value = Math.max(0, Math.min(255, combined));
+        
+        imageData.data[idx] = value;
+        imageData.data[idx + 1] = value;
+        imageData.data[idx + 2] = value;
+        imageData.data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+    
+    // Add mountain ranges (elongated high-contrast features)
+    for (let i = 0; i < 10; i++) {
+      const startX = Math.random() * canvas.width;
+      const startY = Math.random() * canvas.height;
+      const length = Math.random() * 400 + 200;
+      const angle = Math.random() * Math.PI * 2;
+      
+      for (let t = 0; t < length; t += 5) {
+        const x = startX + Math.cos(angle) * t + (Math.random() - 0.5) * 50;
+        const y = startY + Math.sin(angle) * t + (Math.random() - 0.5) * 50;
+        const radius = Math.random() * 30 + 15;
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        gradient.addColorStop(0, 'rgba(255,255,255,0.6)');
+        gradient.addColorStop(0.5, 'rgba(255,255,255,0.3)');
+        gradient.addColorStop(1, 'rgba(128,128,128,0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    
+    // Add impact craters with realistic depth
+    for (let i = 0; i < 15; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const radius = Math.random() * 60 + 20;
+      
+      // Crater rim (bright)
+      const rimGradient = ctx.createRadialGradient(x, y, radius * 0.7, x, y, radius);
+      rimGradient.addColorStop(0, 'rgba(255,255,255,0)');
+      rimGradient.addColorStop(0.7, 'rgba(255,255,255,0.5)');
+      rimGradient.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = rimGradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Crater center (dark)
+      const centerGradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 0.6);
+      centerGradient.addColorStop(0, 'rgba(0,0,0,0.6)');
+      centerGradient.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = centerGradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // Add fine detail texture overlay (optimized)
+    ctx.globalAlpha = 0.2;
+    for (let y = 0; y < canvas.height; y += 8) {
+      for (let x = 0; x < canvas.width; x += 8) {
+        if (Math.random() > 0.7) {
+          ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)';
+          ctx.fillRect(x, y, 2, 2);
+        }
+      }
+    }
+    ctx.globalAlpha = 1.0;
     
     const texture = new THREE.CanvasTexture(canvas);
     return texture;
@@ -1195,6 +1440,94 @@
     }
   }
 
+  // =========================================================
+  // COLLISION DETECTION & PHYSICS
+  // =========================================================
+  function checkCollisions() {
+    const dampingFactor = 0.95; // Energy loss on collision
+    
+    for (let i = 0; i < planetMeshes.length; i++) {
+      for (let j = i + 1; j < planetMeshes.length; j++) {
+        const mesh1 = planetMeshes[i];
+        const mesh2 = planetMeshes[j];
+        
+        // Calculate distance between centers
+        const dx = mesh1.position.x - mesh2.position.x;
+        const dy = mesh1.position.y - mesh2.position.y;
+        const dz = mesh1.position.z - mesh2.position.z;
+        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        
+        // Check if collision occurred
+        const minDistance = mesh1.userData.radius + mesh2.userData.radius;
+        
+        if (distance < minDistance && distance > 0) {
+          // Collision detected! Apply elastic collision physics
+          
+          // Normalize collision vector
+          const nx = dx / distance;
+          const ny = dy / distance;
+          const nz = dz / distance;
+          
+          // Relative velocity
+          const dvx = mesh1.userData.velocityX - mesh2.userData.velocityX;
+          const dvy = mesh1.userData.velocityY - mesh2.userData.velocityY;
+          const dvz = mesh1.userData.velocityZ - mesh2.userData.velocityZ;
+          
+          // Relative velocity in collision normal direction
+          const dvn = dvx * nx + dvy * ny + dvz * nz;
+          
+          // Don't resolve if velocities are separating
+          if (dvn > 0) continue;
+          
+          // Calculate impulse scalar (elastic collision)
+          const m1 = mesh1.userData.mass;
+          const m2 = mesh2.userData.mass;
+          const impulse = (2 * dvn) / (m1 + m2);
+          
+          // Apply impulse to velocities (with damping)
+          mesh1.userData.velocityX -= impulse * m2 * nx * dampingFactor;
+          mesh1.userData.velocityY -= impulse * m2 * ny * dampingFactor;
+          mesh1.userData.velocityZ -= impulse * m2 * nz * dampingFactor;
+          
+          mesh2.userData.velocityX += impulse * m1 * nx * dampingFactor;
+          mesh2.userData.velocityY += impulse * m1 * ny * dampingFactor;
+          mesh2.userData.velocityZ += impulse * m1 * nz * dampingFactor;
+          
+          // Separate overlapping planets
+          const overlap = minDistance - distance;
+          const separationX = nx * overlap * 0.5;
+          const separationY = ny * overlap * 0.5;
+          const separationZ = nz * overlap * 0.5;
+          
+          mesh1.position.x += separationX;
+          mesh1.position.y += separationY;
+          mesh1.position.z += separationZ;
+          
+          mesh2.position.x -= separationX;
+          mesh2.position.y -= separationY;
+          mesh2.position.z -= separationZ;
+          
+          // Update base positions after separation
+          mesh1.userData.xPosition = mesh1.position.x;
+          mesh1.userData.yPosition = mesh1.position.y;
+          mesh1.userData.zPosition = mesh1.position.z;
+          
+          mesh2.userData.xPosition = mesh2.position.x;
+          mesh2.userData.yPosition = mesh2.position.y;
+          mesh2.userData.zPosition = mesh2.position.z;
+          
+          // Visual feedback: slight scale pulse on collision
+          mesh1.scale.setScalar(1.1);
+          mesh2.scale.setScalar(1.1);
+          setTimeout(() => {
+            mesh1.scale.setScalar(1.0);
+            mesh2.scale.setScalar(1.0);
+          }, 100);
+        }
+      }
+    }
+  }
+
   function startOrbitAnimation() {
     if (planetAnimationId) {
       cancelAnimationFrame(planetAnimationId);
@@ -1203,37 +1536,39 @@
     let lastTs = performance.now();
 
     const animate = (ts) => {
-      const dt = Math.max(0, ts - lastTs);
+      const dt = Math.max(0, Math.min(100, ts - lastTs)); // Cap dt to prevent large jumps
       lastTs = ts;
 
-      // Update planet rotations and floating animation (우주에서 떠다니는 효과)
+      // Update planet positions (static line with floating animation)
       planetMeshes.forEach((mesh) => {
         const userData = mesh.userData;
         
-        // Floating animation (부유하는 움직임)
-        // Vertical bobbing (위아래로 천천히 움직임)
+        // Apply velocity perturbations (collision effects)
+        const velocityDamping = 0.995;
+        userData.velocityX *= velocityDamping;
+        userData.velocityY *= velocityDamping;
+        userData.velocityZ *= velocityDamping;
+        
+        // Subtle floating animation (vertical bobbing)
         const floatOffset = Math.sin(ts * userData.floatSpeed + userData.floatPhase) * userData.floatAmplitude;
         
-        // Horizontal drift (좌우로 천천히 표류)
-        const driftX = Math.cos(ts * userData.driftSpeed + userData.floatPhase * 0.5) * userData.driftAmplitude;
-        
-        // Depth drift (앞뒤로 천천히 움직임)
-        const driftZ = Math.sin(ts * userData.driftSpeed * 0.7 + userData.floatPhase * 1.2) * userData.driftAmplitude * 0.8;
-        
-        // Apply floating position (기본 위치 + 부유 오프셋)
+        // Position: base position + floating + collision effects
         mesh.position.set(
-          userData.xPosition + driftX,
-          userData.yPosition + floatOffset,
-          userData.zPosition + driftZ
+          userData.xPosition + userData.velocityX * dt,
+          userData.yPosition + floatOffset + userData.velocityY * dt,
+          userData.zPosition + userData.velocityZ * dt
         );
         
-        // 자전 (Rotation on own axis)
+        // 자전 (Self-rotation on own axis)
         mesh.rotation.y += userData.rotationSpeed * dt;
         
-        // 천천히 기울어지는 효과 (subtle tilt)
-        mesh.rotation.x = Math.sin(ts * userData.driftSpeed * 0.5) * 0.05;
-        mesh.rotation.z = Math.cos(ts * userData.driftSpeed * 0.6) * 0.03;
+        // Gentle swaying motion for natural feel
+        mesh.rotation.x = Math.sin(ts * userData.floatSpeed * 0.5) * 0.02;
+        mesh.rotation.z = Math.cos(ts * userData.floatSpeed * 0.6) * 0.02;
       });
+
+      // Check for collisions and apply physics
+      checkCollisions();
 
       // Animate star fields (slow rotation for depth)
       starFields.forEach((starField, index) => {
@@ -1241,19 +1576,16 @@
         starField.rotation.x += starField.userData.rotSpeed * 0.3 * dt;
       });
 
-      // Dynamic camera movement for immersive space feel
-      const cameraAngle = ts * 0.00002;
-      const verticalAngle = ts * 0.000015;
+      // Dynamic camera movement to observe 3x3 grid
+      const cameraAngle = ts * 0.00002; // Gentle circular motion
       
-      // Smooth orbital-like camera movement
-      camera.position.x = 100 + Math.sin(cameraAngle) * 120;
-      camera.position.y = 280 + Math.cos(verticalAngle) * 70;
-      camera.position.z = 750 + Math.cos(cameraAngle * 0.7) * 80;
+      // Camera with smooth orbital movement around the grid
+      camera.position.x = 100 + Math.sin(cameraAngle) * 120; // Horizontal orbit
+      camera.position.y = 250 + Math.cos(cameraAngle * 0.8) * 50; // Gentle vertical movement
+      camera.position.z = 850 + Math.cos(cameraAngle * 0.5) * 50; // Subtle depth variation
       
-      // Slowly shift focus point for depth perception
-      const focusX = Math.sin(cameraAngle * 0.3) * 30;
-      const focusY = Math.cos(verticalAngle * 0.5) * 20;
-      camera.lookAt(focusX, focusY, 0);
+      // Always look at the center of the 3x3 grid
+      camera.lookAt(0, 0, 0);
 
       renderer.render(scene, camera);
       planetAnimationId = requestAnimationFrame(animate);
@@ -1297,6 +1629,7 @@
     renderTable();
     renderCharts();
     renderGallery();
+    updateStatsWidget();
   }
 
   function recomputeAggregates() {
@@ -1442,34 +1775,89 @@
       return b.createdAt - a.createdAt;
     });
 
+    // Store filtered/sorted items
+    state.gallery.allItems = items;
+    state.gallery.loadedCount = 0;
+
+    // Clear gallery and reset
     galleryGrid.innerHTML = "";
     galleryEmpty.style.display = items.length ? "none" : "block";
-
-    for (const it of items) {
-      const col = hsvToCss(getLevelColor(it.level));
-
-      const card = document.createElement("div");
-      card.className = "gItem";
-      card.dataset.id = it.id;
-
-      card.innerHTML = `
-        <img class="gThumb" alt="scene thumbnail" src="${it.thumb}">
-        <div class="gMeta">
-          <div class="gTitle">${escapeHtml(it.title)}</div>
-          <div class="gSub">
-            <div class="gLevel"><span class="gLevelDot" style="background:${col}"></span> Lv ${it.level}</div>
-            <div>${formatDate(it.createdAt)}</div>
-          </div>
-        </div>
-      `;
-
-      // click -> toggle "active" highlight (visual selection)
-      card.addEventListener("click", () => {
-        card.classList.toggle("gItem--active");
-      });
-
-      galleryGrid.appendChild(card);
+    
+    // Hide loading indicator initially
+    if (galleryLoading) {
+      galleryLoading.style.display = "none";
     }
+
+    // Load initial batch
+    loadMoreGalleryItems();
+  }
+
+  function loadMoreGalleryItems() {
+    if (state.gallery.isLoading) return;
+    
+    const { allItems, loadedCount, itemsPerPage } = state.gallery;
+    
+    if (loadedCount >= allItems.length) {
+      // All items loaded
+      if (galleryLoading) {
+        galleryLoading.style.display = "none";
+      }
+      return;
+    }
+
+    state.gallery.isLoading = true;
+
+    // Show loading indicator
+    if (galleryLoading) {
+      galleryLoading.style.display = "block";
+    }
+
+    // Calculate how many items to load
+    const endIndex = Math.min(loadedCount + itemsPerPage, allItems.length);
+    const itemsToLoad = allItems.slice(loadedCount, endIndex);
+
+    console.log(`Loading gallery items ${loadedCount + 1}-${endIndex} of ${allItems.length}`);
+
+    // Simulate async loading (for smooth UX)
+    setTimeout(() => {
+      // Render items
+      for (const it of itemsToLoad) {
+        const col = hsvToCss(getLevelColor(it.level));
+
+        const card = document.createElement("div");
+        card.className = "gItem";
+        card.dataset.id = it.id;
+
+        card.innerHTML = `
+          <img class="gThumb" alt="scene thumbnail" src="${it.thumb}">
+          <div class="gMeta">
+            <div class="gTitle">${escapeHtml(it.title)}</div>
+            <div class="gSub">
+              <div class="gLevel"><span class="gLevelDot" style="background:${col}"></span> Lv ${it.level}</div>
+              <div>${formatDate(it.createdAt)}</div>
+            </div>
+          </div>
+        `;
+
+        // click -> toggle "active" highlight (visual selection)
+        card.addEventListener("click", () => {
+          card.classList.toggle("gItem--active");
+        });
+
+        galleryGrid.appendChild(card);
+      }
+
+      // Update loaded count
+      state.gallery.loadedCount = endIndex;
+      state.gallery.isLoading = false;
+
+      // Hide loading indicator
+      if (galleryLoading) {
+        galleryLoading.style.display = "none";
+      }
+
+      console.log(`Gallery: ${endIndex}/${allItems.length} items loaded`);
+    }, 100); // Small delay for smooth loading
   }
 
   // =========================================================
@@ -1516,10 +1904,34 @@
     // Render swatches
     posterPaletteRow.innerHTML = "";
     palette.forEach((hsv) => {
+      const swatchWrapper = document.createElement("div");
+      swatchWrapper.style.display = "inline-block";
+      swatchWrapper.style.position = "relative";
+      
       const sw = document.createElement("div");
       sw.className = "swatch";
       sw.style.background = hsvToCss(hsv);
-      posterPaletteRow.appendChild(sw);
+      
+      // Add label for achromatic colors
+      if (hsv.h < 0) {
+        const label = document.createElement("div");
+        label.style.position = "absolute";
+        label.style.bottom = "-18px";
+        label.style.left = "50%";
+        label.style.transform = "translateX(-50%)";
+        label.style.fontSize = "10px";
+        label.style.color = "rgba(255,255,255,0.5)";
+        label.style.whiteSpace = "nowrap";
+        
+        if (hsv.h === -1) label.textContent = "White";
+        else if (hsv.h === -2) label.textContent = "Black";
+        else if (hsv.h === -3) label.textContent = "Gray";
+        
+        swatchWrapper.appendChild(label);
+      }
+      
+      swatchWrapper.appendChild(sw);
+      posterPaletteRow.appendChild(swatchWrapper);
     });
   }
 
@@ -1542,37 +1954,46 @@
       ctx.font = "14px ui-sans-serif, system-ui";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("포스터를 업로드하면 색상 스펙트럼이 표시됩니다", W/2, H/2);
+      ctx.fillText("Upload a poster to display the color spectrum", W/2, H/2);
       return;
     }
     
-    // Sort palette by hue for smooth spectrum
-    const sortedPalette = [...palette].sort((a, b) => a.h - b.h);
+    // Separate chromatic and achromatic colors
+    const chromaticColors = palette.filter(hsv => hsv.h >= 0);
+    const achromaticColors = palette.filter(hsv => hsv.h < 0);
     
-    // Create smooth gradient spectrum
-    const gradient = ctx.createLinearGradient(0, 0, W, 0);
+    // Sort chromatic colors by hue for smooth spectrum
+    const sortedPalette = [...chromaticColors].sort((a, b) => a.h - b.h);
     
-    // Add color stops
-    sortedPalette.forEach((hsv, i) => {
-      const position = i / (sortedPalette.length - 1);
-      gradient.addColorStop(position, hsvToCss(hsv));
-    });
+    // Add achromatic colors at the end
+    const fullPalette = [...sortedPalette, ...achromaticColors];
     
-    // Draw main spectrum
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, W, H * 0.7);
+    // Create smooth gradient spectrum (chromatic only)
+    if (sortedPalette.length > 0) {
+      const gradient = ctx.createLinearGradient(0, 0, W, 0);
+      
+      // Add color stops
+      sortedPalette.forEach((hsv, i) => {
+        const position = i / Math.max(1, sortedPalette.length - 1);
+        gradient.addColorStop(position, hsvToCss(hsv));
+      });
+      
+      // Draw main spectrum
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, W, H * 0.7);
+      
+      // Add subtle gradient overlay for depth
+      const overlayGradient = ctx.createLinearGradient(0, 0, 0, H * 0.7);
+      overlayGradient.addColorStop(0, "rgba(255,255,255,0.15)");
+      overlayGradient.addColorStop(0.5, "rgba(255,255,255,0)");
+      overlayGradient.addColorStop(1, "rgba(0,0,0,0.25)");
+      ctx.fillStyle = overlayGradient;
+      ctx.fillRect(0, 0, W, H * 0.7);
+    }
     
-    // Add subtle gradient overlay for depth
-    const overlayGradient = ctx.createLinearGradient(0, 0, 0, H * 0.7);
-    overlayGradient.addColorStop(0, "rgba(255,255,255,0.15)");
-    overlayGradient.addColorStop(0.5, "rgba(255,255,255,0)");
-    overlayGradient.addColorStop(1, "rgba(0,0,0,0.25)");
-    ctx.fillStyle = overlayGradient;
-    ctx.fillRect(0, 0, W, H * 0.7);
-    
-    // Draw individual color segments at bottom
-    const segmentWidth = W / sortedPalette.length;
-    sortedPalette.forEach((hsv, i) => {
+    // Draw individual color segments at bottom (all colors)
+    const segmentWidth = W / fullPalette.length;
+    fullPalette.forEach((hsv, i) => {
       const x = i * segmentWidth;
       const y = H * 0.72;
       const h = H * 0.28;
@@ -1616,6 +2037,8 @@
 
     // Hue histogram (0..359), weighted by saturation and value to reduce noise
     const bins = new Array(360).fill(0);
+    const pixelCounts = new Array(360).fill(0); // Track pixel count per hue
+    let totalValidPixels = 0;
 
     for (let i=0; i<data.length; i+=4){
       const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
@@ -1623,31 +2046,62 @@
 
       const hsv = rgbToHsv(r,g,b);
 
-      // ignore near-gray pixels
-      if (hsv.s < 0.12 || hsv.v < 0.10) continue;
+      // IMPROVED: Much stricter filtering to ignore gray/low saturation pixels
+      // Only include vibrant, saturated colors
+      if (hsv.s < 0.25 || hsv.v < 0.15) continue; // Increased from 0.12 and 0.10
+      
+      // Additional filter: Reject pixels that are too dark or too bright (likely noise)
+      if (hsv.v < 0.20 || hsv.v > 0.95) continue;
 
       const hi = Math.max(0, Math.min(359, Math.round(hsv.h)));
-      bins[hi] += (0.4 + hsv.s) * (0.35 + hsv.v);
+      
+      // Enhanced weighting: Give much more weight to highly saturated colors
+      const saturationWeight = Math.pow(hsv.s, 2); // Quadratic weighting for saturation
+      const valueWeight = hsv.v * (1.0 - Math.abs(hsv.v - 0.5) * 0.3); // Prefer mid-range values
+      
+      bins[hi] += saturationWeight * valueWeight * 100;
+      pixelCounts[hi] += 1;
+      totalValidPixels += 1;
     }
 
+    console.log(`✓ Valid colored pixels: ${totalValidPixels} / ${data.length/4} (${(totalValidPixels/(data.length/4)*100).toFixed(1)}%)`);
+
+    // Calculate minimum threshold: Only include colors that appear in at least 0.5% of valid pixels
+    const minPixelThreshold = Math.max(5, totalValidPixels * 0.005);
+    
     // pick top k peaks with minimum distance
     const picked = [];
     const used = new Array(360).fill(false);
-    const minDist = 18;
+    const minDist = 20; // Slightly increased from 18 for better separation
 
     for (let t=0; t<k; t++){
       let bestH = -1, bestV = -1;
       for (let h=0; h<360; h++){
         if (used[h]) continue;
-        if (bins[h] > bestV) { bestV = bins[h]; bestH = h; }
+        
+        // IMPROVED: Only consider hues with significant pixel count
+        if (pixelCounts[h] < minPixelThreshold) continue;
+        
+        if (bins[h] > bestV) { 
+          bestV = bins[h]; 
+          bestH = h; 
+        }
       }
       if (bestH < 0 || bestV <= 0) break;
+
+      // Log the selected color for debugging
+      console.log(`  Color ${t+1}: Hue ${bestH}° (${pixelCounts[bestH]} pixels, weight: ${bestV.toFixed(2)})`);
 
       picked.push(bestH);
 
       for (let d=-minDist; d<=minDist; d++){
         used[(bestH + d + 360) % 360] = true;
       }
+    }
+
+    // If we didn't find enough colors, it means the image is mostly gray/low saturation
+    if (picked.length < 3) {
+      console.warn('⚠ Warning: Only found', picked.length, 'distinct colors. Image may be low saturation.');
     }
 
     // convert to HSV palette (use moderate S/V)
@@ -1659,6 +2113,8 @@
       s: 0.58,
       v: 0.70
     }));
+
+    console.log(`✓ Final palette: ${palette.length} colors extracted`);
 
     return palette;
   }
@@ -1748,28 +2204,56 @@
     
     // Use actual analyzed SV values if available
     if (agg && agg.count > 0 && agg.sAvg !== null && agg.vAvg !== null) {
-      // Use real analyzed data with slight adjustments for visibility
-      // sAvg and vAvg are already in 0-1 range from computeHSVSummary()
+      // Strategy: Amplify differences from mean while preserving real data trends
+      // If real data shows level 9 > level 5 > level 1, maintain that order but exaggerate
       
-      // Apply moderate boost to ensure planets are visible and vibrant
-      // Lower levels (dark scenes) will naturally be darker
-      // Higher levels (bright scenes) will naturally be brighter
-      const s = clamp01(agg.sAvg * 1.3); // Boost saturation for visibility
-      const v = clamp01(agg.vAvg * 1.2); // Boost value for brightness
+      // Calculate mean S/V across all levels with data
+      let sSum = 0, vSum = 0, count = 0;
+      for (let lv = 1; lv <= 9; lv++) {
+        const lvAgg = state.aggregates[lv];
+        if (lvAgg && lvAgg.count > 0 && lvAgg.sAvg !== null && lvAgg.vAvg !== null) {
+          sSum += lvAgg.sAvg;
+          vSum += lvAgg.vAvg;
+          count++;
+        }
+      }
       
-      console.log(`Level ${level}: Using analyzed S=${agg.sAvg.toFixed(3)} V=${agg.vAvg.toFixed(3)} (boosted: S=${s.toFixed(3)} V=${v.toFixed(3)})`);
+      const sMean = count > 0 ? sSum / count : 0.5;
+      const vMean = count > 0 ? vSum / count : 0.5;
       
-      return { h, s, v };
+      // Calculate deviation from mean
+      const sDeviation = agg.sAvg - sMean;
+      const vDeviation = agg.vAvg - vMean;
+      
+      // Amplify deviation by 2.0x for dramatic effect
+      // This preserves the real data relationship while exaggerating differences
+      const amplificationFactor = 2.0;
+      
+      // Apply amplified deviation
+      const s = clamp01(sMean + (sDeviation * amplificationFactor));
+      const v = clamp01(vMean + (vDeviation * amplificationFactor));
+      
+      // DIMMED: Lower overall brightness by 30%
+      const sDimmed = s * 0.9; // Reduce saturation slightly
+      const vDimmed = v * 0.7; // Reduce brightness significantly
+      
+      // Ensure minimum visibility (lower thresholds)
+      const sVisible = Math.max(0.15, sDimmed); // Min 0.15 (lowered from 0.25)
+      const vVisible = Math.max(0.20, vDimmed); // Min 0.20 (lowered from 0.30)
+      
+      console.log(`Level ${level}: Real S=${agg.sAvg.toFixed(3)} V=${agg.vAvg.toFixed(3)} | Mean S=${sMean.toFixed(3)} V=${vMean.toFixed(3)} | Dev S=${sDeviation.toFixed(3)} V=${vDeviation.toFixed(3)} → DIMMED: S=${sVisible.toFixed(3)} V=${vVisible.toFixed(3)}`);
+      
+      return { h, s: sVisible, v: vVisible };
     }
     
     // Fallback: level -> mood curve (when no data available)
-    // low levels darker/cooler, high levels brighter
-    const satBoost = 0.52 + t * 0.18;   // 0.52..0.70
-    const valBoost = 0.52 + t * 0.24;   // 0.52..0.76
+    // EXAGGERATED non-linear curve for dramatic difference
+    const satBoost = 0.35 + (t * t * 0.50);   // 0.35..0.85 (exponential)
+    const valBoost = 0.30 + (t * t * 0.60);   // 0.30..0.90 (exponential)
 
-    // also respond a bit to base palette's suggested S/V
-    const s = clamp01((a.s*(1-f) + b.s*f) * 0.75 + satBoost * 0.25);
-    const v = clamp01((a.v*(1-f) + b.v*f) * 0.70 + valBoost * 0.30);
+    // Dramatic blend with base palette
+    const s = clamp01((a.s*(1-f) + b.s*f) * 0.5 + satBoost * 0.5);
+    const v = clamp01((a.v*(1-f) + b.v*f) * 0.4 + valBoost * 0.6);
 
     return { h, s, v };
   }
@@ -2105,6 +2589,13 @@
   }
 
   function hsvToRgb(h, s, v) {
+    // Handle achromatic colors (negative hue values)
+    if (h < 0) {
+      // -1: White, -2: Black, -3: Gray
+      const gray = Math.round(v * 255);
+      return { r: gray, g: gray, b: gray };
+    }
+    
     const c = v * s;
     const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
     const m = v - c;
@@ -2133,7 +2624,12 @@
   function clamp01(x){ return Math.max(0, Math.min(1, x)); }
 
   function lerpHue(h0, h1, t) {
-    // shortest angular interpolation
+    // Handle achromatic colors (no interpolation for negative hues)
+    if (h0 < 0 && h1 < 0) return h0; // Both achromatic, keep first
+    if (h0 < 0) return h1; // First is achromatic, use second
+    if (h1 < 0) return h0; // Second is achromatic, use first
+    
+    // shortest angular interpolation for chromatic colors
     const a = ((h0 % 360) + 360) % 360;
     const b = ((h1 % 360) + 360) % 360;
     let d = b - a;
@@ -2166,6 +2662,167 @@
       .replaceAll(">","&gt;")
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
+  }
+
+  // =========================================================
+  // STATISTICAL ANALYSIS
+  // =========================================================
+  
+  function updateStatsWidget() {
+    const statTotalScenes = document.getElementById('statTotalScenes');
+    const statAvgLevel = document.getElementById('statAvgLevel');
+    const statAvgS = document.getElementById('statAvgS');
+    const statAvgV = document.getElementById('statAvgV');
+
+    if (!statTotalScenes || !statAvgLevel || !statAvgS || !statAvgV) {
+      return;
+    }
+
+    const totalScenes = state.scenes.length;
+    statTotalScenes.textContent = totalScenes;
+
+    if (totalScenes === 0) {
+      statAvgLevel.textContent = '-';
+      statAvgS.textContent = '-';
+      statAvgV.textContent = '-';
+      return;
+    }
+
+    // Calculate averages
+    let levelSum = 0;
+    let sSum = 0;
+    let vSum = 0;
+    let validCount = 0;
+
+    for (const scene of state.scenes) {
+      levelSum += scene.level;
+      if (scene.hsv && scene.hsv.avgS !== null && scene.hsv.avgV !== null) {
+        sSum += scene.hsv.avgS;
+        vSum += scene.hsv.avgV;
+        validCount++;
+      }
+    }
+
+    const avgLevel = (levelSum / totalScenes).toFixed(1);
+    const avgS = validCount > 0 ? (sSum / validCount).toFixed(1) : '-';
+    const avgV = validCount > 0 ? (vSum / validCount).toFixed(1) : '-';
+
+    statAvgLevel.textContent = avgLevel;
+    statAvgS.textContent = avgS;
+    statAvgV.textContent = avgV;
+  }
+
+  async function analyzeCorrelation() {
+    const analyzeBtn = document.getElementById('analyzeCorrelationBtn');
+    const resultsDiv = document.getElementById('correlationResults');
+    const corrHue = document.getElementById('corrHue');
+    const corrSaturation = document.getElementById('corrSaturation');
+    const corrValue = document.getElementById('corrValue');
+    const corrInterpretation = document.getElementById('corrInterpretation');
+
+    if (!analyzeBtn || !resultsDiv) {
+      console.error('Correlation analysis elements not found');
+      return;
+    }
+
+    analyzeBtn.disabled = true;
+    analyzeBtn.textContent = '분석 중...';
+
+    try {
+      const response = await fetch('/api/statistics/correlation/');
+      
+      if (!response.ok) {
+        throw new Error('Correlation analysis request failed');
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      // Display correlation results
+      if (corrHue) {
+        const h = data.correlation.hue;
+        corrHue.innerHTML = `
+          <strong>correlation coefficient (r):</strong> ${h.r}<br>
+          <strong>p-value:</strong> ${h.p}<br>
+          <strong>significance:</strong> ${h.significance === 'significant' ? 'significant ✓' : 'not significant'}<br>
+          <strong>strength:</strong> ${h.strength} (${h.direction})
+        `;
+      }
+
+      if (corrSaturation) {
+        const s = data.correlation.saturation;
+        corrSaturation.innerHTML = `
+          <strong>correlation coefficient (r):</strong> ${s.r}<br>
+          <strong>p-value:</strong> ${s.p}<br>
+          <strong>significance:</strong> ${s.significance === 'significant' ? 'significant ✓' : 'not significant'}<br>
+          <strong>strength:</strong> ${s.strength} (${s.direction})<br>
+          <strong>regression equation:</strong> S = ${data.regression.saturation.slope.toFixed(2)} × Level + ${data.regression.saturation.intercept.toFixed(2)}<br>
+          <strong>R²:</strong> ${data.regression.saturation.r_squared}
+        `;
+      }
+
+      if (corrValue) {
+        const v = data.correlation.value;
+        corrValue.innerHTML = `
+          <strong>correlation coefficient (r):</strong> ${v.r}<br>
+          <strong>p-value:</strong> ${v.p}<br>
+          <strong>significance:</strong> ${v.significance === 'significant' ? 'significant ✓' : 'not significant'}<br>
+          <strong>strength:</strong> ${v.strength} (${v.direction})<br>
+          <strong>regression equation:</strong> V = ${data.regression.value.slope.toFixed(2)} × Level + ${data.regression.value.intercept.toFixed(2)}<br>
+          <strong>R²:</strong> ${data.regression.value.r_squared}
+        `;
+      }
+
+      if (corrInterpretation && data.interpretation) {
+        corrInterpretation.innerHTML = `
+          <h4>${data.interpretation.summary}</h4>
+          <ul>
+            ${data.interpretation.key_findings.map(finding => `<li>${finding}</li>`).join('')}
+          </ul>
+        `;
+      }
+
+      resultsDiv.style.display = 'block';
+      console.log('✓ Correlation analysis completed', data);
+
+    } catch (e) {
+      console.error('Correlation analysis failed:', e);
+      alert(`correlation analysis failed: ${e.message}`);
+    } finally {
+      analyzeBtn.disabled = false;
+      analyzeBtn.textContent = 'run correlation analysis';
+    }
+  }
+
+  async function downloadJSON() {
+    try {
+      const response = await fetch('/api/export/');
+      
+      if (!response.ok) {
+        throw new Error('data export failed');
+      }
+
+      const data = await response.json();
+      
+      // Create blob and download
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cinematic_data_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log('✓ JSON export completed');
+    } catch (e) {
+      console.error('JSON export failed:', e);
+      alert(`JSON download failed: ${e.message}`);
+    }
   }
 
 })();

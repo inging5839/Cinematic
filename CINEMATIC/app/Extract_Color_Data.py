@@ -4,7 +4,11 @@ import os
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-source_dir = "datasets/minju"
+from pathlib import Path
+import os
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # CINEMATIC 폴더
+source_dir = BASE_DIR / "media" / "scenes"
 
 files = sorted(
     os.listdir(source_dir),
